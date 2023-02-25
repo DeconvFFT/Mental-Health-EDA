@@ -1,0 +1,13 @@
+name: MentalHealthUpdated
+title: MentalHealthUpdated
+username:
+account: saumya001
+server: shinyapps.io
+hostUrl: https://api.shinyapps.io/v1
+appId: 8106864
+bundleId: 6765875
+url: https://saumya001.shinyapps.io/MentalHealthUpdated/
+when: 1674510917.45719
+lastSyncTime: 1674510917.45724
+asMultiple: FALSE
+asStatic: FALSE

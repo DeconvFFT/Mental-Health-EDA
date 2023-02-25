@@ -1,0 +1,810 @@
+---
+title: "mentalhealthupdated"
+output: html_document
+date: "2022-12-08"
+runtime: shiny
+---
+
+```{r}
+packages_list <- c("tidyverse", "dplyr","janitor","ggplot2","arm","tidyr","GGally","broom","mgcv","metR","MASS","NHANES","plotly","ggthemes","metR")
+to_be_installed <- packages_list[!(packages_list %in% installed.packages()[,"Package"])]
+if (length(to_be_installed) > 0) {
+  install.packages(to_be_installed)
+}
+```
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(dplyr)
+library(janitor)
+library(ggplot2)
+library(arm)
+library(tidyr)
+library(GGally)
+library(broom)
+library(mgcv)
+library(metR)
+library(MASS)
+library(NHANES)
+library(plotly)
+library(ggthemes)
+library(metR)
+library(shiny)
+#library(xlsx)
+cb_palette = c("#999999", "#E69F00", "#56B4E9", "#009E73",
+               "#F0E442", "#0072B2", "#D55E00", "#CC79A7")
+suppressWarnings(library(dplyr))
+cbPalette <- c("#999999", "#E69F00", "#56B4E9", "#009E73", "#F0E442", "#0072B2", "#D55E00", "#CC79A7")
+```
+
+#Research Question 1:
+```{r}
+world = read.csv("data/dep_share.csv") %>% filter(Year == 2017)
+gender = read.csv("data/depression-by-gender.csv")
+continents = read.csv("data/continent.csv")
+continents$location = continents$Country
+```
+
+```{r, echo=FALSE}
+world_coordinates <- map_data("world")
+world_coordinates$Entity = world_coordinates$region
+world_depression = left_join(world, world_coordinates, by = "Entity")
+world_depression$percentage_dep = world_depression$Prevalence...Depressive.disorders...Sex..Both...Age..Age.standardized..Percent.
+ggplot(world_depression, aes(x = long, y = lat, group = group, fill = percentage_dep)) +
+  geom_polygon(color = "gray", size = 0.1) +
+  theme_map() +
+  scale_fill_gradient(low = "yellow", high = "red") +
+  ggtitle("Percentage of Depression by Country
+          ") +
+  labs(subtitle = "Red represetns high depression and Yellow is low depression",
+       caption = "Data downloaded from https://ourworldindata.org/mental-health#citation")
+```
+
+```{r}
+gender_continent = left_join(gender,continents,by= "location")
+gender_continent = na.omit(gender_continent)
+gender_continent$val = gender_continent$val * 100
+
+v= data.frame(Gender = recode(gender_continent$sex,"Male" = 1,"Female"=0),Depression= gender_continent$val,Continent = gender_continent$Continent)
+
+ggplot(v,aes(x =Gender, y =Depression))+geom_jitter()+geom_smooth(method ="lm",col="orange") +facet_wrap(~Continent,nrow=2) +ylab("Depression Percentage") +xlab("Gender") + ggtitle("Continent Analysis of Depression (1990-2017) by Gender") +
+  labs(subtitle = "0= Female & 1=Male",
+       caption = "Data downloaded from https://ourworldindata.org/mental-health#citation")
+```
+
+```{r}
+trend = gender_continent %>% group_by(Continent,year,sex) %>% summarise(avgdep = mean(val))
+
+ggplot(trend, aes(x=year, y = avgdep,col=sex)) + geom_line() + facet_wrap(~Continent,nrow=2) +
+  xlab("Years") + ylab("Average Depression") + ggtitle("Trend for depression by continents and gender")  +
+  labs(caption = "Data downloaded from https://ourworldindata.org/mental-health#citation")
+```
+
+#Research Question 2:
+Load mental health depression data
+```{r}
+depByAge <- read.csv("data/depression-by-age.csv", header = TRUE)
+```
+
+Data cleanup
+```{r}
+depByAge.df <- depByAge %>% 
+  rename("year" = "year",
+         "country" = "location",
+         "depression" = "val") %>% 
+  filter(age %in% c("10-14 years",  "15-19 years","25-29 years","30-34 years","50-69 years","70+ years")) %>% 
+  dplyr::select(year, country,age, depression) %>% 
+  mutate(depression = depression *100)
+```
+
+Load continent <> country mapping
+```{r}
+continents <- read.csv("data/continent.csv", header = TRUE) %>% 
+  rename("country" = "Country", "continent" = "Continent")
+```
+
+Load country wise GDP data
+```{r}
+gdpPerCap <- read.csv("data/GM-GDP per capita - Dataset - v28 - data-for-countries-etc-by-year.csv") %>% 
+  rename("country" = "name", "year" = "time") %>% 
+  dplyr::select(country, year, Income.per.person)
+  
+```
+
+Load population data
+```{r}
+population = read.csv("data/GM-Population - Dataset - v6 - data-for-countries-etc-by-year.csv")
+populationFiltered = filter(population,time>=1990 & time<=2017) %>% 
+  rename("country" = "name", "year" = "time")
+```
+
+Adding continents to depression data
+```{r}
+depByAge.cont <- depByAge.df %>% 
+  left_join(continents, by = "country") %>% 
+  dplyr::select(year, continent, country, age,depression) %>% 
+  filter(!is.na(continent))
+```
+
+```{r}
+depwGDP <- depByAge.cont %>% left_join(gdpPerCap, by = "country")
+```
+
+Plot for depression vs age group in USA over time
+```{r}
+depwGDP %>% 
+  group_by(continent, age) %>% 
+  summarise(avg_depPct = median(depression)) %>% 
+ggplot(aes(x = age, y = avg_depPct))+
+  geom_point()+
+  facet_wrap(~ continent)+
+  scale_color_manual(values = cbPalette)+
+  theme_bw()+
+  ggtitle("Depression % among age groups across continents")+
+  labs(subtitle = "",
+       caption = "Data from https://ourworldindata.org")+
+  ylab("Median Depression %")+
+  xlab("Age bracket")+
+    scale_x_discrete(guide = guide_axis(angle = 60)) 
+
+```
+
+```{r}
+
+age.medians <- depByAge.cont %>% 
+  mutate(age =recode(age, "10-14 years" = 1,   "15-19 years"=2, "25-29 years"=3, "30-34 years"=4,  "50-69 years"=5, "70+ years"=6)) %>% 
+  filter(!is.na(age)) %>% 
+  group_by(age) %>% 
+  dplyr::summarise(medianDep = median(depression))
+ggplot(depByAge.cont, aes(x = recode(age, "10-14 years" = 1,   "15-19 years"=2, "25-29 years"=3, "30-34 years"=4,  "50-69 years"=5, "70+ years"=6), y = depression))+
+  geom_jitter()+
+  geom_point(data=age.medians,aes(x = age, y = medianDep), color = "orange")+
+ scale_x_continuous(name = "Age group", breaks = c(1,2,3,4,5,6), labels = c("10-14 years",  "15-19 years","25-29 years","30-34 years","50-69 years","70+ years"),
+                    guide = guide_axis(angle = 60))+
+  ylab("Depression %")+
+  ggtitle("Depression % in age groups")+
+  labs(subtitle = "Orange dots represent median depression %",
+       caption = "Data from https://ourworldindata.org")+
+  theme_bw()
+  
+```
+
+
+```{r}
+
+age.medians <- depByAge.cont %>% 
+  mutate(age =recode(age, "10-14 years" = 1,   "15-19 years"=2, "25-29 years"=3, "30-34 years"=4,  "50-69 years"=5, "70+ years"=6)) %>% 
+  filter(!is.na(age)) %>% 
+  group_by(age) %>% 
+  dplyr::summarise(medianDep = median(depression))
+ggplot(depByAge.cont, aes(x = recode(age, "10-14 years" = 1,   "15-19 years"=2, "25-29 years"=3, "30-34 years"=4,  "50-69 years"=5, "70+ years"=6), y = depression))+
+  geom_jitter()+
+  geom_point(data=age.medians,aes(x = age, y = medianDep), color = "orange")+
+ scale_x_continuous(name = "Age group", breaks = c(1,2,3,4,5,6), labels = c("10-14 years",  "15-19 years","25-29 years","30-34 years","50-69 years","70+ years"),
+                    guide = guide_axis(angle = 60))+
+  ylab("Depression %")+
+  ggtitle("Depression % in age groups")+
+  labs(subtitle = "Orange dots represent median depression %",
+       caption = "Data from https://ourworldindata.org")+
+  theme_bw()
+  
+```
+
+Depression trend in North America
+```{r}
+depByAge.usa <- depByAge.cont %>% 
+  filter(continent == "North America" | continent == "Oceania") %>%
+  filter(country %in% c("Greenland", "Canada", "Australia", "New Zealand")) %>% 
+  mutate(country = factor(country, levels = c("Greenland", "Canada", "Australia", "New Zealand"))) %>% 
+  arrange(continent)
+```
+
+```{r}
+depByAge.usa.medians <- depByAge.usa %>% 
+  mutate(age =recode(age, "10-14 years" = 1,   "15-19 years"=2, "25-29 years"=3, "30-34 years"=4,  "50-69 years"=5, "70+ years"=6)) %>% 
+  filter(!is.na(age)) %>% 
+  group_by(country,age) %>% 
+  dplyr::summarise(medianDep = median(depression))
+depByAge.usa %>% 
+ggplot(aes(x = recode(age, "10-14 years" = 1,   "15-19 years"=2, "25-29 years"=3, "30-34 years"=4,  "50-69 years"=5, "70+ years"=6), y = depression))+
+  geom_jitter()+
+  geom_point(data=depByAge.usa.medians,aes(x = age, y = medianDep), color = "orange")+
+  facet_wrap(~country)+
+ scale_x_continuous(name = "Age group", breaks = c(1,2,3,4,5,6), labels = c("10-14 years",  "15-19 years","25-29 years","30-34 years","50-69 years","70+ years"),
+                    guide = guide_axis(angle = 60))+
+  ylab("Depression %")+
+  ggtitle("Depression trend exceptions in North America and Oceania")+
+  labs(subtitle = "Orange dots represent median depression %",
+       caption = "Data from https://ourworldindata.org")+
+  theme_bw()
+  
+```
+
+Depression trend in Oceania
+```{r}
+depByAge.oceania <- depByAge.cont %>% 
+filter(continent == "Oceania", country %in% c("Australia", "New Zealand")) 
+```
+
+```{r}
+depByAge.oceania.medians <- depByAge.oceania%>% 
+  mutate(age =recode(age, "10-14 years" = 1,   "15-19 years"=2, "25-29 years"=3, "30-34 years"=4,  "50-69 years"=5, "70+ years"=6)) %>% 
+  filter(!is.na(age)) %>% 
+  group_by(country,age) %>% 
+  dplyr::summarise(medianDep = median(depression))
+depByAge.oceania %>% 
+ggplot(aes(x = recode(age, "10-14 years" = 1,   "15-19 years"=2, "25-29 years"=3, "30-34 years"=4,  "50-69 years"=5, "70+ years"=6), y = depression))+
+  geom_jitter()+
+  geom_point(data=depByAge.oceania.medians,aes(x = age, y = medianDep), color = "orange")+
+  facet_wrap(~country)+
+ scale_x_continuous(name = "Age group", breaks = c(1,2,3,4,5,6), labels = c("10-14 years",  "15-19 years","25-29 years","30-34 years","50-69 years","70+ years"),
+                    guide = guide_axis(angle = 60))+
+  ylab("Depression %")+
+  ggtitle("Depression % in age groups across Australia and New Zealand")+
+  labs(subtitle = "Orange dots represent median depression %",
+       caption = "Data from https://ourworldindata.org")+
+  theme_bw()
+  
+```
+```{r}
+depByAge.recoded <- depByAge.cont%>% 
+  mutate(age =recode(age, "10-14 years" = 1,   "15-19 years"=2, "25-29 years"=3, "30-34 years"=4,  "50-69 years"=5, "70+ years"=6))
+age.lm <- lm( depByAge.recoded$depression ~ depByAge.recoded$age )
+display(age.lm)
+AIC(age.lm)
+
+```
+
+Fit a model for age and sex
+```{r}
+depbyAgeSex <- read.csv("data/depression-by-age-gender.csv", header = TRUE)
+depbyAgeSex.df <- depbyAgeSex %>% 
+  rename("country" = "location",
+         "depression" = "val"
+         ) %>% 
+  filter(age %in% c("10-14 years",  "15-19 years","25-29 years","30-34 years","50-69 years","70+ years")) %>% 
+  dplyr::select(year, country,age,sex, depression) %>% 
+  mutate(depression = depression *100)
+```
+
+```{r}
+depbyAgeSex.df <- depbyAgeSex.df %>% 
+  mutate(age =recode(age, "10-14 years" = 1,   "15-19 years"=2, "25-29 years"=3, "30-34 years"=4,  "50-69 years"=5, "70+ years"=6),
+         sex = recode(sex, "Male" = 1, "Female"=2))
+
+```
+
+```{r}
+age.lm <- lm(depbyAgeSex.df$depression ~ depbyAgeSex.df$age + depbyAgeSex.df$sex )
+age.lm2 <- lm(depbyAgeSex.df$depression ~ depbyAgeSex.df$age + depbyAgeSex.df$sex + depbyAgeSex.df$age:depbyAgeSex.df$sex )
+AIC(age.lm)
+AIC(age.lm2)
+display(age.lm)
+display(age.lm2)
+```
+
+
+```{r}
+model.df <- data.frame(age = depbyAgeSex.df$age,
+                       sex = depbyAgeSex.df$sex,
+                       .resid = residuals(age.lm2),
+                       .fitted = fitted.values(age.lm2))
+```
+
+```{r}
+model.grid <- expand.grid(age = c(1,2,3,4,5,6), sex = c(1,2))
+dep.predict <- predict(age.lm2, newdata = model.grid)
+depmodel.df <- data.frame(model.grid, depression = as.vector(dep.predict))
+```
+
+```{r}
+ggplot(depmodel.df, aes(x = age, y = depression))+
+  geom_point()+
+  facet_wrap(~sex) +
+  xlab("Age")+
+  ylab("Sex")+
+  ggtitle("Figure 4: Height vs Age, filled by Average BMI(log scaled)")+
+  labs(subtitle = "Lines represent contours",
+       fill = "Average BMI(log scaled)",
+       caption="Data created from values based on NHANES dataset")+
+  theme_bw()
+```
+
+```{r}
+ggplot(model.df, aes(x = age, y = .resid))+
+  geom_jitter()+
+  geom_smooth(method = "loess", se = FALSE)
+```
+
+```{r}
+ggplot(model.df, aes(x = sex, y = .resid))+
+  geom_jitter()+
+  geom_smooth(method = "loess", se = FALSE)
+
+```
+
+# Research Question 3:
+```{r}
+data = read.csv("data/depression-disorders.csv")
+```
+
+```{r}
+continent = read.csv("data/continent.csv")
+continent
+```
+```{r}
+filteredData = data%>%
+  filter(cause=="Depressive disorders")%>%
+  filter(year==2017)%>%
+  select(location,val)
+filteredData$location <- gsub("United States of America", "United States", filteredData$location)
+filteredData
+```
+
+```{r}
+gdp_data = read.csv("data/API_NY.GDP.PCAP.CD_DS2_en_csv_v2_4701206.csv",skip = 4)
+gdp_data = gdp_data%>%
+  select(Country.Name,X2017)
+gdp_data
+```
+```{r}
+gdp = read.csv("data/GM-GDP per capita - Dataset - v28 - data-for-countries-etc-by-year.csv")
+```
+
+```{r}
+filtered_gdp = gdp%>%
+  filter(time==2017)%>%
+  select("name","time","GDP.total")
+filtered_gdp
+```
+
+```{r}
+merged_df = gdp_data%>%
+  left_join(filtered_gdp,by=c("Country.Name"="name"))%>%
+  na.omit()
+```
+
+```{r}
+merged_df = merged_df %>%
+  left_join(filteredData,by=c("Country.Name"="location"))%>%
+  na.omit()
+```
+
+```{r}
+merged_df = merged_df%>%
+  left_join(continent,by=c("Country.Name"="Country"))%>%
+  na.omit()
+```
+
+```{r}
+merged_df
+```
+
+```{r}
+data%>%
+  filter(cause=="Depressive disorders")%>%
+  select(location,val,year)%>%
+  left_join(continent,by=c("location"="Country"))%>%
+  group_by(Continent,year)%>%
+  summarise(Depression=mean(val))%>%
+  drop_na()%>%
+  ggplot(aes(x=year,y=Depression,color=Continent))+
+  geom_line()+
+  scale_color_manual(values=cb_palette)+
+  xlab("Year")+
+  ylab("Depression(%)")+
+  labs(title = "Depression Rate by continents over the years 1990-2017",
+              caption = "Data source: https://data.world/vizzup/mental-health-depression-disorder-data")
+```
+
+```{r}
+merged_df$CountryBracket = case_when(merged_df$X2017<1006~"Low Income",
+                                     merged_df$X2017>=1006 & merged_df$X2017<3955 ~"Lower-middle Income",
+                                     merged_df$X2017>=3955 & merged_df$X2017<12235 ~"Upper-middle Income",
+                                     merged_df$X2017>=12235 ~"High Income")
+merged_df
+```
+
+```{r}
+merged_df$CountryBracket =  factor(merged_df$CountryBracket, levels=c("Low Income","Lower-middle Income","Upper-middle Income","High Income"))
+merged_df$mul100 = merged_df$val*100
+ggplot(merged_df,aes(x=GDP.total,y=mul100))+
+  geom_point()+
+  geom_smooth(method='lm',se=FALSE)+
+  scale_x_log10()+
+  facet_wrap(~CountryBracket)+
+  # scale_color_manual(values=cb_palette)+
+  xlab("GDP of the country")+
+  ylab("Depression(%)")+
+  labs(title = "Depression Rate by total GDP of the countries",
+              subtitle = "Faceted by GDP per Capita income group",
+              caption = "Data source: https://data.world/vizzup/mental-health-depression-disorder-data")
+```
+
+```{r}
+ggplot(merged_df,aes(x=X2017,y=mul100))+
+geom_point()+
+geom_smooth(color="orange")+
+scale_x_log10()
+```
+
+```{r}
+ggplot(merged_df,aes(x=X2017,y=mul100))+
+geom_point(size=2)+
+geom_smooth(method="gam",se=FALSE)+
+scale_x_log10()+
+xlab("GDP Per Capita")+
+ylab("Depression(%)")+
+labs(title = "Figure 3.1 Depression Rate by GDP Per Capita",
+            subtitle = "Blue line represents the fitted GAM model",
+            caption = "Data from: https://ourworldindata.org\n
+                      https://data.worldbank.org")
+
+
+ggplot(merged_df,aes(x=X2017,y=mul100))+
+geom_point(size=2)+
+geom_smooth(method="lm",se=FALSE)+
+scale_x_log10()+
+xlab("GDP Per Capita")+
+ylab("Depression(%)")+
+scale_color_manual(values=cb_palette)+
+facet_wrap(~Continent)+
+labs(title = "Depression Rate by GDP Per Capita Faceted by Continents",
+            subtitle = "Blue line represents the overall trend",
+            caption = "Data from: https://ourworldindata.org\n
+                      https://data.worldbank.org")
+```
+
+```{r}
+ggplot(merged_df,aes(x=X2017,y=mul100))+
+geom_point(aes(color=CountryBracket),size=2)+
+geom_smooth(method="lm",se=FALSE)+
+scale_x_log10()+
+xlab("GDP Per Capita")+
+ylab("Depression(%)")+
+scale_color_manual(values=cb_palette)+
+facet_wrap(~Continent)+
+labs(title = "Figure 3.2 Depression Rate by GDP Per Capita Faceted by Continents",
+            subtitle = "Blue line represents the overall trend",
+            caption = "Data from : https://ourworldindata.org\n
+            https://data.worldbank.org",
+     color='Income Group')
+```
+
+```{r}
+merged_df%>%
+  filter(Continent=="Oceania")
+```
+
+
+```{r}
+merged_df$logX2017 = log10(merged_df$X2017)
+depression.gam = gam(mul100~s(logX2017),data=merged_df,method="REML")
+depression.gam.df = augment(depression.gam)
+```
+
+```{r}
+ggplot(depression.gam.df, aes(x=logX2017,y=.resid)) + geom_jitter() + geom_smooth(method = "loess") +
+    xlab("Alcohol Disorder population (in percent)") +
+  ggtitle('Residual plot with alcohol disorder population') +
+  labs(subtitle = "GAM Model",
+    caption = "Data domain : Mental health")
+```
+
+```{r}
+ggplot(depression.gam.df,aes(x=.fitted,y=abs(.resid))) + geom_point() + geom_smooth(method="lm")
+```
+
+```{r}
+summary(depression.gam)
+```
+
+```{r}
+newdata1 = expand.grid(X2017=seq(250,15000,100))
+newdata2 = expand.grid(X2017=seq(15500,150000,1000))
+newdata = combine(newdata1$X2017,newdata2$X2017)
+newdata = data.frame(X2017=newdata)
+newdata$logX2017 = log10(newdata$X2017)
+```
+
+```{r}
+depression.pred = predict(depression.gam,newdata=newdata)
+depression.pred = data.frame(newdata,predicted_depression=as.vector(depression.pred))
+depression.pred
+```
+
+
+```{r}
+ggplot(depression.pred,aes(x=X2017,y=predicted_depression))+
+geom_point()+
+# geom_smooth(color="orange")+
+scale_x_log10()
+```
+
+## Research Question 4:
+```{r}
+continents <- read.csv("data/continent.csv", header = TRUE) %>% 
+  rename("country" = "Country", "continent" = "Continent")
+head(continents)
+
+data <- read.csv("data/depression-disorders.csv",sep=',') %>% drop_na() %>% rename("country" = "location") %>% inner_join(continents,by="country") %>% dplyr::select(-c("upper","lower","metric","measure","sex","age")) %>% reshape(idvar = c("country","year","continent"), timevar = "cause", direction = "wide") %>% clean_names() %>% select(-c("country","continent"))
+head(data)
+
+```
+
+```{r}
+ggpairs(data[c('val_alcohol_use_disorders','val_drug_use_disorders','val_depressive_disorders')])
+```
+
+Distribution of each column for year 2000
+```{r}
+#alcohol_use_disorders, drug_use_disorders
+data_2000 <- read.csv("data/depression-disorders.csv",sep=',') %>% drop_na() %>% rename("country" = "location") %>% filter(year == '2000') %>% inner_join(continents,by="country") %>% dplyr::select(-c("upper","lower","metric","measure","sex","age")) %>% reshape(idvar = c("country","year","continent"), timevar = "cause", direction = "wide") %>% clean_names() %>% select(c("continent","val_alcohol_use_disorders","val_drug_use_disorders","val_depressive_disorders")) %>% mutate_at(vars(c("val_alcohol_use_disorders","val_drug_use_disorders","val_depressive_disorders")), .funs = funs(. * 100))
+head(data_2000)
+
+ggplot(data_2000,aes(x=val_alcohol_use_disorders,y=val_depressive_disorders,color = continent)) +geom_point() +  scale_color_manual(values=cbPalette) + geom_smooth(method = "loess",se=FALSE, color="black") +
+  xlab("Alcohol Disorder population (in percent)") +
+  ylab("Depressed population (in percent)")+
+  ggtitle('Depression as a function of alcohol disorder in year 2000') +
+  labs(caption = "Data domain : Mental health")
+
+ggplot(data_2000,aes(x=val_drug_use_disorders,y=val_depressive_disorders,color = continent)) +geom_point() +  scale_color_manual(values=cbPalette) + geom_smooth(method = "loess",se=FALSE, color="black") +
+  xlab("Drug Disorder population (in percent)") +
+  ylab("Depressed population (in percent)")+
+  ggtitle('Depression as a function of drug disorder in 2000') +
+  labs(caption = "Data domain : Mental health")
+
+
+ggplot(data_2000,aes(x=val_alcohol_use_disorders,y=val_drug_use_disorders,color = continent)) + geom_jitter() +
+  scale_color_manual(values=cbPalette) +
+  xlab("Alcohol Disorder population (in percent)") +
+  ylab("Drug population (in percent)")+
+  ggtitle('Alcohol vs Drug') +
+  labs(caption = "Data domain : Mental health")
+
+```
+
+Main data
+```{r}
+m_data <- read.csv("data/depression-disorders.csv",sep=',') %>% drop_na() %>% rename("country" = "location") %>% inner_join(continents,by="country") %>% dplyr::select(-c("upper","lower","metric","measure","sex","age")) %>% reshape(idvar = c("country","year","continent"), timevar = "cause", direction = "wide") %>% clean_names() %>% select(c("continent","year","val_alcohol_use_disorders","val_drug_use_disorders","val_depressive_disorders")) %>% mutate_at(vars(c("val_alcohol_use_disorders","val_drug_use_disorders","val_depressive_disorders")), .funs = funs(. * 100))
+head(m_data)
+summary(m_data)
+```
+
+Linear model
+```{r}
+gap.lm2 = lm(val_depressive_disorders ~ val_alcohol_use_disorders, data = m_data)
+display(gap.lm2)
+
+gap.lm.df <- data.frame(m_data,
+                        .fitted = fitted.values(gap.lm2),
+                        .resid = residuals(gap.lm2))
+
+data.grid2 <- expand.grid(val_alcohol_use_disorders = 0.25:3.5,val_drug_use_disorders = 0.05:1.5)
+head(data.grid2,100)
+data.pred = predict(gap.lm2,newdata = data.grid2)
+data.grid2$depression_pred = as.vector(data.pred)
+data.plot.df <- data.frame(data.grid2)
+
+ggplot(data.plot.df, aes(x = val_alcohol_use_disorders, y = depression_pred)) + geom_point() 
+ggplot(data.plot.df, aes(x = val_drug_use_disorders, y = depression_pred)) + geom_point()
+
+```
+
+
+```{r}
+gap.lm2 = lm(val_depressive_disorders ~ val_drug_use_disorders, data = m_data)
+display(gap.lm2)
+
+gap.lm.df <- data.frame(m_data,
+                        .fitted = fitted.values(gap.lm2),
+                        .resid = residuals(gap.lm2))
+
+data.grid2 <- expand.grid(val_alcohol_use_disorders = 0.25:3.5,val_drug_use_disorders = 0.05:1.5)
+head(data.grid2,100)
+data.pred = predict(gap.lm2,newdata = data.grid2)
+data.grid2$depression_pred = as.vector(data.pred)
+data.plot.df <- data.frame(data.grid2)
+
+ggplot(data.plot.df, aes(x = val_alcohol_use_disorders, y = depression_pred)) + geom_point() 
+ggplot(data.plot.df, aes(x = val_drug_use_disorders, y = depression_pred)) + geom_point()
+
+```
+
+
+```{r}
+gap.lm2 = lm(val_depressive_disorders ~ val_alcohol_use_disorders+val_drug_use_disorders, data = m_data)
+display(gap.lm2)
+
+gap.lm.df <- data.frame(m_data,
+                        .fitted = fitted.values(gap.lm2),
+                        .resid = residuals(gap.lm2))
+
+data.grid2 <- expand.grid(val_alcohol_use_disorders = 0.25:3.5,val_drug_use_disorders = 0.05:1.5)
+head(data.grid2,100)
+data.pred = predict(gap.lm2,newdata = data.grid2)
+data.grid2$depression_pred = as.vector(data.pred)
+data.plot.df <- data.frame(data.grid2)
+
+ggplot(data.plot.df, aes(x = val_alcohol_use_disorders, y = depression_pred)) + geom_point() 
+ggplot(data.plot.df, aes(x = val_drug_use_disorders, y = depression_pred)) + geom_point()
+
+```
+
+Linear model
+```{r}
+gap.lm2 = lm(val_depressive_disorders ~ val_alcohol_use_disorders + val_drug_use_disorders + val_alcohol_use_disorders:val_drug_use_disorders, data = m_data)
+display(gap.lm2)
+
+gap.lm.df <- data.frame(m_data,
+                        .fitted = fitted.values(gap.lm2),
+                        .resid = residuals(gap.lm2))
+
+data.grid2 <- expand.grid(val_alcohol_use_disorders = 0.25:3.5,val_drug_use_disorders = 0.05:1.5)
+head(data.grid2,100)
+data.pred = predict(gap.lm2,newdata = data.grid2)
+data.grid2$depression_pred = as.vector(data.pred)
+data.plot.df <- data.frame(data.grid2)
+
+ggplot(data.plot.df, aes(x = val_alcohol_use_disorders, y = depression_pred)) + geom_point() 
+ggplot(data.plot.df, aes(x = val_drug_use_disorders, y = depression_pred)) + geom_point()
+
+```
+
+#Research Question 5
+Final model:
+```{r}
+genagedis = read.csv("data/depression-age-gender-disorders.csv")
+data = genagedis %>% dplyr::select(sex,age,cause,val,year,location)
+z = data %>% tidyr::pivot_wider(values_from = "val",names_from = "cause")
+z$drug = z$`Drug use disorders` *100
+z$dep = z$`Depressive disorders` * 100
+z$alcohol = z$`Alcohol use disorders` *100
+
+z= na.omit(z)
+z = z %>% filter(age %in% c("10-14 years",  "15-19 years","25-29 years","30-34 years","50-69 years","70+ years"))
+
+depbyAgeGenDis <- z %>% 
+  mutate(age =recode(age, "10-14 years" = 1,   "15-19 years"=2, "25-29 years"=3, "30-34 years"=4,  "50-69 years"=5, "70+ years"=6),
+         sex = recode(sex, "Male" = 1, "Female"=2))
+
+dep.lm = lm(dep ~ age + sex+ age:sex+alcohol+age:alcohol+sex:alcohol+drug+age:drug+sex:drug ,data = depbyAgeGenDis)
+display(dep.lm)
+```
+
+```{r}
+colnames(data)
+```
+
+
+```{r}
+model.df <- data.frame(age = depbyAgeGenDis$age,
+                       sex = depbyAgeGenDis$sex,
+                       alcohol = depbyAgeGenDis$alcohol,
+                       drug = depbyAgeGenDis$drug,
+                       .resid = residuals(dep.lm),
+                       .fitted = fitted.values(dep.lm))
+```
+
+```{r}
+model.grid <- expand.grid(age = c(1,2,3,4,5,6), sex = c(1,2), alcohol = seq(0.1, 17, 0.5), drug = seq(0.1, 6, 0.5))
+dep.predict <- predict(dep.lm, newdata = model.grid)
+depmodel.df <- data.frame(model.grid, depression = as.vector(dep.predict))
+```
+
+```{r}
+sexes <- c(`1` = "Male",
+           `2` = "Female")
+ggplot(depmodel.df, aes(x = alcohol, y = depression, group = age, color = as.factor(age)))+
+  geom_smooth(se = FALSE)+
+  facet_wrap(~sex, labeller = as_labeller(sexes))+
+  xlab("Alcohol use %")+
+  ylab("Depression %")+
+  ggtitle("Depression  % vs Alcohol use % faceted by sex")+
+  labs(subtitle = "Colors of lines represent different age groups",
+       caption="Data from https://ourworldindata.org",
+       color = "Age Group"
+      )+
+  scale_color_manual(labels = c("10-14 years",  "15-19 years","25-29 years","30-34 years","50-69 years","70+ years"),
+                     values = cbPalette)+
+  theme_bw()
+```
+
+```{r}
+sexes <- c(`1` = "Male",
+           `2` = "Female")
+ggplot(depmodel.df, aes(x = drug, y = depression, group = age, color = as.factor(age)))+
+  geom_smooth(se = FALSE)+
+  facet_wrap(~sex, labeller = as_labeller(sexes))+
+  xlab("Drug use %")+
+  ylab("Depression %")+
+  ggtitle("Depression  % vs Drug use % faceted by sex")+
+  labs(subtitle = "Colors of lines represent different age groups",
+       caption="Data from https://ourworldindata.org",
+       color = "Age Group"
+      )+
+  scale_color_manual(labels = c("10-14 years",  "15-19 years","25-29 years","30-34 years","50-69 years","70+ years"),
+                     values = cbPalette)+
+  theme_bw()
+```
+
+
+###Appendix###
+Gam model with just smoothened
+```{r}
+
+#"val_alcohol_use_disorders","val_drug_use_disorders","val_depressive_disorders"
+data.gam = gam(val_depressive_disorders ~ s(val_alcohol_use_disorders) + s(val_drug_use_disorders), data = m_data, method = "REML")
+data.gam.df = augment(data.gam)
+print(summary(data.gam))
+  
+#drug_use_disorders
+#ggplot(data.gam.df, aes(x=val_drug_use_disorders,y=.resid)) + geom_point() + geom_smooth(method = "loess") +
+#  xlab("Drug Disorder population (in percent)") +
+#  ggtitle('Residual plot with drug disorder population') 
+
+#alcohol_use_disorders
+#ggplot(data.gam.df, aes(x=val_alcohol_use_disorders,y=.resid)) + geom_point() + geom_smooth(method = "loess") +
+#  xlab("Alcohol Disorder population (in percent)") +
+#  ggtitle('Residual plot with alcohol disorder population') 
+
+data.grid2 <- expand.grid(val_alcohol_use_disorders = 0.5:3.5,val_drug_use_disorders = 0.25:1.5)
+data.pred = predict(data.gam,newdata = data.grid2)
+data.grid2$depression_pred = as.vector(data.pred)
+data.plot.df <- data.frame(data.grid2)
+
+ggplot(data.plot.df,aes(x = val_alcohol_use_disorders, y = val_drug_use_disorders, z=depression_pred, fill=depression_pred))+geom_raster()+
+  scale_fill_distiller(palette = "RdYlBu") +
+  ylab("drug_use_disorder(in percent)")+
+  xlab("alcohol_use_disorder(in percent)") +
+  #geom_contour() +
+#geom_text_contour() +
+  theme_bw() +
+  ggtitle('Figure 4.3: Raster Plot between substance disorder and depression percent')
+
+```
+
+
+```{r}
+
+#"val_alcohol_use_disorders","val_drug_use_disorders","val_depressive_disorders"
+data.gam = gam(val_depressive_disorders ~ s(val_alcohol_use_disorders,val_drug_use_disorders), data = m_data, method = "REML")
+data.gam.df = augment(data.gam)
+summary(data.gam)
+  
+#alcohol_use_disorders
+#ggplot(data.gam.df, aes(x=val_drug_use_disorders,y=.resid)) + geom_point() + geom_smooth(method = "loess") +
+#  xlab("Drug Disorder population (in percent)") +
+#  ggtitle('Residual plot with drug disorder population') 
+
+#alcohol_use_disorders
+#ggplot(data.gam.df, aes(x=val_alcohol_use_disorders,y=.resid)) + geom_point() + geom_smooth(method = "loess") +
+#  xlab("Alcohol Disorder population (in percent)") +
+#  ggtitle('Residual plot with alcohol disorder population') 
+
+data.grid2 <- expand.grid(val_alcohol_use_disorders = 0.5:3.5,val_drug_use_disorders = 0.25:1.5)
+data.pred = predict(data.gam,newdata = data.grid2)
+data.grid2$depression_pred = as.vector(data.pred)
+data.plot.df <- data.frame(data.grid2)
+
+ggplot(data.plot.df,aes(x = val_alcohol_use_disorders, y = val_drug_use_disorders, z=depression_pred, fill=depression_pred))+ geom_raster() +
+   scale_fill_distiller(palette = "RdYlBu") +
+#   ylab("drug_use_disorder")+
+#   xlab("alcohol_use_disorder") +
+  geom_contour() +
+# geom_text_contour() +
+ theme_bw() 
+#   ggtitle('Raster and Counter')
+
+```
+
+
+
+
+
+
+
+
+
